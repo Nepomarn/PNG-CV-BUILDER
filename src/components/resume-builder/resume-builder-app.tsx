@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { createClient } from "../../../supabase/client";
+import { createClient } from "@/utils/supabase/client";
 import JobSearchSection, { JobListing } from "./job-search-section";
 import FileUploadZone from "./file-upload-zone";
 import ActionButtons from "./action-buttons";
@@ -142,11 +142,20 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         throw new Error(error.message || 'Failed to process documents');
       }
 
+      // Check for error in response data
+      if (data?.error) {
+        console.error('API returned error:', data.error);
+        if (data.error.includes('AI service') || data.error.includes('GEMINI') || data.error.includes('API key') || data.error.includes('configured')) {
+          throw new Error(t.apiKeyError);
+        }
+        throw new Error(data.error);
+      }
+
       if (data?.success) {
         setExtractedData(data.extractedData);
         setGeneratedContent({
           ...data.generatedContent,
-          atsScore: data.generatedContent.atsScore || Math.floor(Math.random() * 15) + 85,
+          atsScore: data.generatedContent?.atsScore || Math.floor(Math.random() * 15) + 85,
         });
         setFilesProcessed(data.filesProcessed || []);
         setExtractedSummary(data.extractedData?.summary || "");
@@ -156,20 +165,17 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
           description: t.successMessage,
         });
       } else {
-        const errorMsg = data?.error || 'Unknown error';
-        if (errorMsg.includes('API key') || errorMsg.includes('Gemini')) {
-          throw new Error(t.apiKeyError);
-        }
+        const errorMsg = data?.error || data?.details || 'Unknown error occurred';
         throw new Error(errorMsg);
       }
     } catch (error) {
       console.error('Generation error:', error);
       const errorMessage = error instanceof Error ? error.message : t.errorMessage;
-      let displayMessage = t.errorMessage;
+      let displayMessage = errorMessage;
       
-      if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+      if (errorMessage.includes('network') || errorMessage.includes('fetch') || errorMessage.includes('Failed to fetch')) {
         displayMessage = t.networkError;
-      } else if (errorMessage.includes('API key') || errorMessage.includes('configured')) {
+      } else if (errorMessage.includes('API key') || errorMessage.includes('configured') || errorMessage.includes('AI service')) {
         displayMessage = t.apiKeyError;
       } else if (errorMessage.includes('process') || errorMessage.includes('extract')) {
         displayMessage = t.processingError;

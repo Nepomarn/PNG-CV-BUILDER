@@ -3,12 +3,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
-
-if (!GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY is not set in environment variables');
-}
-
 interface JobAdData {
   title: string;
   company: string;
@@ -35,9 +29,9 @@ interface GeneratedContent {
   atsScore: number;
 }
 
-async function extractTextWithGemini(base64Data: string, mimeType: string): Promise<string> {
+async function extractTextWithGemini(base64Data: string, mimeType: string, apiKey: string): Promise<string> {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -72,7 +66,7 @@ async function extractTextWithGemini(base64Data: string, mimeType: string): Prom
   throw new Error('Failed to extract text from document');
 }
 
-async function generateCVWithGemini(extractedText: string, jobAdData: JobAdData | null): Promise<{ extractedData: ExtractedData; generatedContent: GeneratedContent }> {
+async function generateCVWithGemini(extractedText: string, jobAdData: JobAdData | null, apiKey: string): Promise<{ extractedData: ExtractedData; generatedContent: GeneratedContent }> {
   const jobContext = jobAdData 
     ? `The user is applying for: ${jobAdData.title} at ${jobAdData.company} in ${jobAdData.location}. Job description: ${jobAdData.description}`
     : 'No specific job selected - create a general professional CV and cover letter.';
@@ -116,7 +110,7 @@ Return a JSON object with this EXACT structure (no markdown, just pure JSON):
 }`;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -154,11 +148,18 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders, status: 200 });
   }
 
+  // Get API key inside the handler to ensure it's fresh
+  const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+
   try {
     // Check for API key first
     if (!GEMINI_API_KEY) {
+      console.error('GEMINI_API_KEY is not set');
       return new Response(
-        JSON.stringify({ error: 'Gemini API key not configured. Please contact support.' }),
+        JSON.stringify({ 
+          success: false,
+          error: 'AI service not configured. Please set GEMINI_API_KEY in project settings.' 
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
       );
     }
@@ -227,7 +228,7 @@ Deno.serve(async (req) => {
           mimeType = mimeTypes[ext || ''] || 'application/octet-stream';
         }
         
-        const extractedText = await extractTextWithGemini(base64Data, mimeType);
+        const extractedText = await extractTextWithGemini(base64Data, mimeType, GEMINI_API_KEY);
         extractedTexts.push(`=== ${file.name} ===\n${extractedText}`);
         console.log(`Successfully extracted text from ${file.name}`);
       } catch (error) {
@@ -239,7 +240,7 @@ Deno.serve(async (req) => {
     const combinedText = extractedTexts.join('\n\n');
     console.log('Generating CV and cover letter with Gemini AI...');
     
-    const { extractedData, generatedContent } = await generateCVWithGemini(combinedText, jobAdData);
+    const { extractedData, generatedContent } = await generateCVWithGemini(combinedText, jobAdData, GEMINI_API_KEY);
 
     return new Response(
       JSON.stringify({
@@ -255,7 +256,11 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('Error processing files:', error);
     return new Response(
-      JSON.stringify({ error: 'Failed to process files with AI', details: error.message }),
+      JSON.stringify({ 
+        success: false, 
+        error: 'Failed to process files with AI', 
+        details: error.message 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }
