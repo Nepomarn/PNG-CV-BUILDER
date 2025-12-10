@@ -130,7 +130,7 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         setProcessingStep(prev => Math.min(prev + 1, 4));
       }, 1500);
 
-      const { data, error } = await supabase.functions.invoke('supabase-functions-ocr-extract', {
+      const { data, error } = await supabase.functions.invoke('ocr-extract', {
         body: formData,
       });
 
