@@ -3,7 +3,11 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+
+if (!GEMINI_API_KEY) {
+  console.error('GEMINI_API_KEY is not set in environment variables');
+}
 
 interface JobAdData {
   title: string;
@@ -151,6 +155,14 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Check for API key first
+    if (!GEMINI_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: 'Gemini API key not configured. Please contact support.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      );
+    }
+
     let files: File[] = [];
     let jobAdData: JobAdData | null = null;
     
