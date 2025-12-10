@@ -30,40 +30,57 @@ interface GeneratedContent {
 }
 
 async function extractTextWithGemini(base64Data: string, mimeType: string, apiKey: string): Promise<string> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            {
-              text: `Extract ALL text from this document. If it's a CV/resume, extract all personal information, education, work experience, skills, and references. If it's a certificate, extract the name, institution, date, and qualification. If it's a job advertisement, extract the job title, company, location, requirements, and description. Return the extracted text in a structured format.`
-            },
-            {
-              inline_data: {
-                mime_type: mimeType,
-                data: base64Data
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                text: `Extract ALL text from this document. If it's a CV/resume, extract all personal information, education, work experience, skills, and references. If it's a certificate, extract the name, institution, date, and qualification. If it's a job advertisement, extract the job title, company, location, requirements, and description. Return the extracted text in a structured format.`
+              },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: base64Data
+                }
               }
-            }
-          ]
-        }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 4096,
-        }
-      })
-    }
-  );
+            ]
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 4096,
+          }
+        })
+      }
+    );
 
-  const result = await response.json();
-  
-  if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
-    return result.candidates[0].content.parts[0].text;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error:', response.status, errorText);
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    
+    if (result.error) {
+      console.error('Gemini returned error:', result.error);
+      throw new Error(result.error.message || 'Gemini API error');
+    }
+    
+    if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+      return result.candidates[0].content.parts[0].text;
+    }
+    
+    console.error('Unexpected Gemini response:', JSON.stringify(result).substring(0, 500));
+    throw new Error('Failed to extract text from document');
+  } catch (error) {
+    console.error('extractTextWithGemini error:', error);
+    throw error;
   }
-  
-  throw new Error('Failed to extract text from document');
 }
 
 async function generateCVWithGemini(extractedText: string, jobAdData: JobAdData | null, apiKey: string): Promise<{ extractedData: ExtractedData; generatedContent: GeneratedContent }> {
@@ -109,38 +126,55 @@ Return a JSON object with this EXACT structure (no markdown, just pure JSON):
   }
 }`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: prompt }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 8192,
-        }
-      })
-    }
-  );
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 8192,
+          }
+        })
+      }
+    );
 
-  const result = await response.json();
-  
-  if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
-    let jsonText = result.candidates[0].content.parts[0].text;
-    jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    
-    try {
-      return JSON.parse(jsonText);
-    } catch (e) {
-      console.error('Failed to parse Gemini response:', jsonText);
-      throw new Error('Failed to parse AI response');
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini CV generation error:', response.status, errorText);
+      throw new Error(`Gemini API error: ${response.status}`);
     }
+
+    const result = await response.json();
+    
+    if (result.error) {
+      console.error('Gemini returned error:', result.error);
+      throw new Error(result.error.message || 'Gemini API error');
+    }
+    
+    if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+      let jsonText = result.candidates[0].content.parts[0].text;
+      jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      
+      try {
+        return JSON.parse(jsonText);
+      } catch (e) {
+        console.error('Failed to parse Gemini response:', jsonText.substring(0, 500));
+        throw new Error('Failed to parse AI response - invalid JSON');
+      }
+    }
+    
+    console.error('Unexpected Gemini response:', JSON.stringify(result).substring(0, 500));
+    throw new Error('Failed to generate CV content');
+  } catch (error) {
+    console.error('generateCVWithGemini error:', error);
+    throw error;
   }
-  
-  throw new Error('Failed to generate CV content');
 }
 
 Deno.serve(async (req) => {
@@ -202,7 +236,26 @@ Deno.serve(async (req) => {
     const fileInfos: { name: string; type: string; size: number }[] = [];
     const extractedTexts: string[] = [];
     
+    // Helper function to convert ArrayBuffer to base64 (handles large files)
+    function arrayBufferToBase64(buffer: ArrayBuffer): string {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const chunkSize = 8192;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+        binary += String.fromCharCode.apply(null, Array.from(chunk));
+      }
+      return btoa(binary);
+    }
+
     for (const file of files) {
+      // Check file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        console.error(`File ${file.name} is too large (${file.size} bytes)`);
+        extractedTexts.push(`=== ${file.name} ===\n[File too large - max 10MB allowed]`);
+        continue;
+      }
+
       fileInfos.push({
         name: file.name,
         type: file.type,
@@ -212,7 +265,7 @@ Deno.serve(async (req) => {
       
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+        const base64Data = arrayBufferToBase64(arrayBuffer);
         
         let mimeType = file.type;
         if (!mimeType || mimeType === 'application/octet-stream') {
@@ -222,10 +275,36 @@ Deno.serve(async (req) => {
             'jpg': 'image/jpeg',
             'jpeg': 'image/jpeg',
             'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp',
             'doc': 'application/msword',
-            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'txt': 'text/plain'
           };
           mimeType = mimeTypes[ext || ''] || 'application/octet-stream';
+        }
+
+        // Validate supported mime types for Gemini
+        const supportedTypes = [
+          'application/pdf',
+          'image/jpeg',
+          'image/png',
+          'image/gif',
+          'image/webp',
+          'text/plain'
+        ];
+        
+        if (!supportedTypes.includes(mimeType)) {
+          console.log(`Unsupported file type ${mimeType}, treating as text`);
+          // For unsupported types like DOCX, try to read as text
+          const textDecoder = new TextDecoder('utf-8', { fatal: false });
+          const text = textDecoder.decode(arrayBuffer);
+          if (text && text.length > 100) {
+            extractedTexts.push(`=== ${file.name} ===\n${text.substring(0, 10000)}`);
+            console.log(`Extracted text content from ${file.name}`);
+            continue;
+          }
+          mimeType = 'application/pdf'; // Fallback to PDF for Gemini
         }
         
         const extractedText = await extractTextWithGemini(base64Data, mimeType, GEMINI_API_KEY);
@@ -233,8 +312,18 @@ Deno.serve(async (req) => {
         console.log(`Successfully extracted text from ${file.name}`);
       } catch (error) {
         console.error(`Error processing ${file.name}:`, error);
-        extractedTexts.push(`=== ${file.name} ===\n[Could not extract text from this file]`);
+        extractedTexts.push(`=== ${file.name} ===\n[Could not extract text from this file: ${error.message}]`);
       }
+    }
+    
+    if (extractedTexts.length === 0 || extractedTexts.every(t => t.includes('[Could not extract') || t.includes('[File too large'))) {
+      return new Response(
+        JSON.stringify({ 
+          success: false,
+          error: 'Could not extract text from any of the uploaded files. Please try different files (PDF, JPG, PNG recommended).' 
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
     }
     
     const combinedText = extractedTexts.join('\n\n');

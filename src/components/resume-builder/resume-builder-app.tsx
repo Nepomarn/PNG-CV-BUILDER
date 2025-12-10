@@ -110,8 +110,10 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
       
       // Get the Supabase URL for edge function invocation
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      if (!supabaseUrl) {
-        throw new Error('Supabase URL not configured');
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      
+      if (!supabaseUrl || !supabaseAnonKey) {
+        throw new Error('Supabase configuration missing');
       }
       
       const formData = new FormData();
@@ -137,9 +139,19 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         setProcessingStep(prev => Math.min(prev + 1, 4));
       }, 1500);
 
-      const { data, error } = await supabase.functions.invoke('supabase-functions-ocr-extract', {
+      // Use direct fetch to edge function for FormData support
+      const edgeFunctionUrl = `${supabaseUrl}/functions/v1/supabase-functions-ocr-extract`;
+      
+      const response = await fetch(edgeFunctionUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+        },
         body: formData,
       });
+      
+      const data = await response.json();
+      const error = !response.ok ? { message: data?.error || 'Request failed' } : null;
 
       clearInterval(progressInterval);
       setProcessingStep(5);
