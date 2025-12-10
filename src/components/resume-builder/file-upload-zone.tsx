@@ -18,7 +18,10 @@ const translations = {
     supported: "Supported: PDF, DOCX, JPG, PNG",
     remove: "Remove",
     maxError: "Maximum 5 files allowed",
-    invalidError: "Some files were invalid",
+    invalidError: "Some files were invalid. Please use PDF, DOCX, JPG, or PNG files.",
+    fileTooLarge: "File too large. Maximum size is 10MB per file.",
+    filesUploaded: "files uploaded",
+    readyToProcess: "Ready to process!",
   },
   tp: {
     title: "Putim Ol Dokumen Bilong Yu",
@@ -27,7 +30,10 @@ const translations = {
     supported: "Yumi ken kisim: PDF, DOCX, JPG, PNG",
     remove: "Rausim",
     maxError: "Maximum 5 fayl tasol",
-    invalidError: "Sampela fayl i no gutpela",
+    invalidError: "Sampela fayl i no gutpela. Yusim PDF, DOCX, JPG, o PNG fayl.",
+    fileTooLarge: "Fayl i bikpela tumas. Maximum saiz em 10MB.",
+    filesUploaded: "fayl i putim pinis",
+    readyToProcess: "Redi long proses!",
   },
 };
 
@@ -58,6 +64,15 @@ export default function FileUploadZone({ language, files, onFilesChange }: FileU
       "image/png",
     ];
 
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+    // Check file sizes
+    const oversizedFiles = fileArray.filter(file => file.size > MAX_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      setError(t.fileTooLarge);
+      return;
+    }
+
     const validFiles = fileArray.filter((file) => validTypes.includes(file.type));
 
     if (validFiles.length + files.length > 5) {
@@ -73,7 +88,7 @@ export default function FileUploadZone({ language, files, onFilesChange }: FileU
 
     const updatedFiles = [...files, ...validFiles];
     onFilesChange(updatedFiles);
-  }, [files, onFilesChange, t.maxError, t.invalidError]);
+  }, [files, onFilesChange, t.maxError, t.invalidError, t.fileTooLarge]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -114,6 +129,22 @@ export default function FileUploadZone({ language, files, onFilesChange }: FileU
           {t.title}
         </h2>
         <p className="font-inter text-gray-300 mb-6">{t.subtitle}</p>
+
+        {/* File count indicator */}
+        {files.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-4 flex items-center justify-center gap-2"
+          >
+            <div className="flex items-center gap-2 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-full">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="font-inter text-sm text-green-400">
+                {files.length}/5 {t.filesUploaded} • {t.readyToProcess}
+              </span>
+            </div>
+          </motion.div>
+        )}
 
         <div
           onDragOver={handleDragOver}

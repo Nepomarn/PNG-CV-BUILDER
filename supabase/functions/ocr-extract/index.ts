@@ -1,5 +1,3 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -37,38 +35,51 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const formData = await req.formData();
-    const files: File[] = [];
+    let files: File[] = [];
     let jobAdData: JobAdData | null = null;
     
-    for (const [key, value] of formData.entries()) {
-      if (value instanceof File) {
-        files.push(value);
-      } else if (key === 'job_ad_text' && typeof value === 'string') {
-        try {
-          jobAdData = JSON.parse(value);
-        } catch (e) {
-          console.log('Could not parse job ad data');
+    const contentType = req.headers.get('content-type') || '';
+    
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      
+      for (const [key, value] of formData.entries()) {
+        if (value instanceof File && value.size > 0) {
+          files.push(value);
+        } else if (key === 'job_ad_text' && typeof value === 'string') {
+          try {
+            jobAdData = JSON.parse(value);
+          } catch (e) {
+            console.log('Could not parse job ad data');
+          }
         }
       }
-    }
-
-    if (files.length === 0) {
+    } else {
       return new Response(
-        JSON.stringify({ error: 'No files provided' }),
+        JSON.stringify({ error: 'Invalid content type. Expected multipart/form-data' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
 
-    const extractedTexts: string[] = [];
-    
-    for (const file of files) {
-      const arrayBuffer = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-      extractedTexts.push(`[File: ${file.name}]\n${base64.substring(0, 500)}...`);
+    if (files.length === 0) {
+      return new Response(
+        JSON.stringify({ error: 'No valid files provided. Please upload PDF, DOCX, JPG, or PNG files.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
     }
 
-    const combinedText = extractedTexts.join('\n\n');
+    console.log(`Processing ${files.length} files...`);
+    
+    const fileInfos: { name: string; type: string; size: number }[] = [];
+    
+    for (const file of files) {
+      fileInfos.push({
+        name: file.name,
+        type: file.type,
+        size: file.size
+      });
+      console.log(`File: ${file.name}, Type: ${file.type}, Size: ${file.size} bytes`);
+    }
     
     const extractedData: ExtractedData = {
       name: extractNameFromFiles(files),
@@ -98,6 +109,7 @@ Deno.serve(async (req) => {
         extractedData,
         generatedContent,
         jobAdData,
+        filesProcessed: fileInfos,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );

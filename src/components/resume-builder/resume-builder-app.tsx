@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { createClient } from "@/../supabase/client";
+import { createClient } from "../../../supabase/client";
 import JobSearchSection, { JobListing } from "./job-search-section";
 import FileUploadZone from "./file-upload-zone";
 import ActionButtons from "./action-buttons";
 import LivePreviewPane, { ExtractedData, GeneratedContent } from "./live-preview-pane";
+import ProcessingProgress from "./processing-progress";
 import { useToast } from "@/components/ui/use-toast";
 
 interface ResumeBuilderAppProps {
@@ -25,6 +26,8 @@ const translations = {
     regenerateMessage: "Creating a new cover letter for you.",
     jobSelected: "Job Selected",
     jobSelectedMessage: "Your CV will be tailored for this position.",
+    noFilesError: "Please upload at least one document first.",
+    networkError: "Network error. Please check your connection and try again.",
   },
   tp: {
     errorTitle: "Eroa",
@@ -38,12 +41,15 @@ const translations = {
     regenerateMessage: "Wokim nupela cover letter bilong yu.",
     jobSelected: "Wok i Makim",
     jobSelectedMessage: "CV bilong yu bai fit long dispela wok.",
+    noFilesError: "Putim wanpela dokumen pastaim.",
+    networkError: "Netwok eroa. Sekim koneksen bilong yu na traim gen.",
   },
 };
 
 export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [processingStep, setProcessingStep] = useState(0);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
   const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
   const [selectedJob, setSelectedJob] = useState<JobListing | null>(null);
@@ -67,9 +73,17 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
   }, [t.jobSelected, t.jobSelectedMessage, toast]);
 
   const handleGenerate = async () => {
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      toast({
+        title: t.errorTitle,
+        description: t.noFilesError,
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsLoading(true);
+    setProcessingStep(1);
 
     try {
       const supabase = createClient();
@@ -89,15 +103,26 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         }));
       }
 
+      setProcessingStep(2);
+      
+      // Simulate progress steps
+      const progressInterval = setInterval(() => {
+        setProcessingStep(prev => Math.min(prev + 1, 4));
+      }, 1500);
+
       const { data, error } = await supabase.functions.invoke('supabase-functions-ocr-extract', {
         body: formData,
       });
 
+      clearInterval(progressInterval);
+      setProcessingStep(5);
+
       if (error) {
-        throw error;
+        console.error('Supabase function error:', error);
+        throw new Error(error.message || 'Failed to process documents');
       }
 
-      if (data.success) {
+      if (data?.success) {
         setExtractedData(data.extractedData);
         setGeneratedContent({
           ...data.generatedContent,
@@ -112,13 +137,17 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
       }
     } catch (error) {
       console.error('Generation error:', error);
+      const errorMessage = error instanceof Error ? error.message : t.errorMessage;
       toast({
         title: t.errorTitle,
-        description: t.errorMessage,
+        description: errorMessage.includes('network') || errorMessage.includes('fetch') 
+          ? t.networkError 
+          : t.errorMessage,
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
+      setProcessingStep(0);
     }
   };
 
@@ -218,6 +247,14 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         files={files}
         onFilesChange={handleFilesChange}
       />
+      
+      {isLoading && (
+        <ProcessingProgress 
+          language={language} 
+          currentStep={processingStep}
+          totalFiles={files.length}
+        />
+      )}
       
       <ActionButtons
         language={language}
