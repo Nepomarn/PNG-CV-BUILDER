@@ -107,6 +107,13 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
 
     try {
       const supabase = createClient();
+      
+      // Get the Supabase URL for edge function invocation
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      if (!supabaseUrl) {
+        throw new Error('Supabase URL not configured');
+      }
+      
       const formData = new FormData();
       
       files.forEach((file, index) => {
@@ -130,7 +137,7 @@ export default function ResumeBuilderApp({ language }: ResumeBuilderAppProps) {
         setProcessingStep(prev => Math.min(prev + 1, 4));
       }, 1500);
 
-      const { data, error } = await supabase.functions.invoke('ocr-extract', {
+      const { data, error } = await supabase.functions.invoke('supabase-functions-ocr-extract', {
         body: formData,
       });
 
