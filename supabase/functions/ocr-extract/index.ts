@@ -3,6 +3,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
+
 interface JobAdData {
   title: string;
   company: string;
@@ -27,6 +29,120 @@ interface GeneratedContent {
   resume: string;
   coverLetter: string;
   atsScore: number;
+}
+
+async function extractTextWithGemini(base64Data: string, mimeType: string): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              text: `Extract ALL text from this document. If it's a CV/resume, extract all personal information, education, work experience, skills, and references. If it's a certificate, extract the name, institution, date, and qualification. If it's a job advertisement, extract the job title, company, location, requirements, and description. Return the extracted text in a structured format.`
+            },
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Data
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+        }
+      })
+    }
+  );
+
+  const result = await response.json();
+  
+  if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+    return result.candidates[0].content.parts[0].text;
+  }
+  
+  throw new Error('Failed to extract text from document');
+}
+
+async function generateCVWithGemini(extractedText: string, jobAdData: JobAdData | null): Promise<{ extractedData: ExtractedData; generatedContent: GeneratedContent }> {
+  const jobContext = jobAdData 
+    ? `The user is applying for: ${jobAdData.title} at ${jobAdData.company} in ${jobAdData.location}. Job description: ${jobAdData.description}`
+    : 'No specific job selected - create a general professional CV and cover letter.';
+
+  const prompt = `You are an expert CV writer specializing in Papua New Guinea job market. Based on the following extracted document text, create a professional CV and cover letter.
+
+EXTRACTED DOCUMENT TEXT:
+${extractedText}
+
+JOB CONTEXT:
+${jobContext}
+
+IMPORTANT INSTRUCTIONS:
+1. Extract real information from the documents where available
+2. For any missing information, create realistic placeholder data appropriate for PNG
+3. Emphasize community involvement and leadership (important in PNG culture)
+4. Include both English proficiency and Tok Pisin if mentioned
+5. Format for ATS (Applicant Tracking Systems)
+
+Return a JSON object with this EXACT structure (no markdown, just pure JSON):
+{
+  "extractedData": {
+    "name": "Full Name from document or 'Papua New Guinea Applicant'",
+    "province": "Province from document or 'National Capital District'",
+    "phone": "Phone from document or '+675 7XXX XXXX'",
+    "email": "Email from document or 'applicant@email.com'",
+    "education": "Education details, each on new line",
+    "experience": "Work experience with bullet points",
+    "skills": ["Array", "of", "skills"],
+    "summary": "Professional summary paragraph",
+    "communityLeadership": "Community and volunteer work",
+    "referees": [
+      {"name": "Referee Name", "title": "Title, Company", "phone": "+675 XXXX XXXX"}
+    ]
+  },
+  "generatedContent": {
+    "resume": "Full formatted resume text",
+    "coverLetter": "Full cover letter text",
+    "atsScore": 85
+  }
+}`;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{ text: prompt }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 8192,
+        }
+      })
+    }
+  );
+
+  const result = await response.json();
+  
+  if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+    let jsonText = result.candidates[0].content.parts[0].text;
+    jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    try {
+      return JSON.parse(jsonText);
+    } catch (e) {
+      console.error('Failed to parse Gemini response:', jsonText);
+      throw new Error('Failed to parse AI response');
+    }
+  }
+  
+  throw new Error('Failed to generate CV content');
 }
 
 Deno.serve(async (req) => {
@@ -68,9 +184,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Processing ${files.length} files...`);
+    console.log(`Processing ${files.length} files with Gemini AI...`);
     
     const fileInfos: { name: string; type: string; size: number }[] = [];
+    const extractedTexts: string[] = [];
     
     for (const file of files) {
       fileInfos.push({
@@ -78,30 +195,39 @@ Deno.serve(async (req) => {
         type: file.type,
         size: file.size
       });
-      console.log(`File: ${file.name}, Type: ${file.type}, Size: ${file.size} bytes`);
+      console.log(`Processing file: ${file.name}, Type: ${file.type}, Size: ${file.size} bytes`);
+      
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+        
+        let mimeType = file.type;
+        if (!mimeType || mimeType === 'application/octet-stream') {
+          const ext = file.name.split('.').pop()?.toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            'pdf': 'application/pdf',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          };
+          mimeType = mimeTypes[ext || ''] || 'application/octet-stream';
+        }
+        
+        const extractedText = await extractTextWithGemini(base64Data, mimeType);
+        extractedTexts.push(`=== ${file.name} ===\n${extractedText}`);
+        console.log(`Successfully extracted text from ${file.name}`);
+      } catch (error) {
+        console.error(`Error processing ${file.name}:`, error);
+        extractedTexts.push(`=== ${file.name} ===\n[Could not extract text from this file]`);
+      }
     }
     
-    const extractedData: ExtractedData = {
-      name: extractNameFromFiles(files),
-      province: "National Capital District",
-      phone: "+675 7XXX XXXX",
-      email: "applicant@email.com",
-      education: "Grade 12 Certificate - Sogeri National High School (2018)\nDiploma in Business Studies - University of Papua New Guinea (2021)",
-      experience: "Sales Assistant | PNG Retail Store | 2021 - Present\n• Increased monthly sales by 15% through excellent customer service\n• Trained and mentored 5 new team members\n• Managed inventory and stock control systems\n\nCustomer Service Officer | Digicel PNG | 2019 - 2021\n• Handled 50+ customer inquiries daily\n• Resolved complaints with 95% satisfaction rate\n• Processed mobile money transactions",
-      skills: ["Customer Service", "Microsoft Office", "Communication", "Teamwork", "Problem Solving", "Tok Pisin", "English", "Cash Handling", "Inventory Management"],
-      summary: "Dedicated and hardworking professional from Papua New Guinea with 4+ years of customer service experience. Proven track record of exceeding sales targets and building strong customer relationships. Passionate about contributing to organizational growth while developing my career in a dynamic environment.",
-      communityLeadership: "Youth Group Leader | Gerehu Community Church | 2020 - Present\n• Organized weekly youth programs for 30+ members\n• Led community clean-up initiatives\n\nVolunteer | PNG Red Cross | 2019\n• Assisted with disaster relief efforts in Morobe Province",
-      referees: [
-        { name: "Mr. John Kila", title: "Store Manager, PNG Retail Store", phone: "+675 7123 4567" },
-        { name: "Ms. Mary Tau", title: "HR Manager, Digicel PNG", phone: "+675 7234 5678" },
-      ],
-    };
-
-    const generatedContent: GeneratedContent = {
-      resume: generateResumeText(extractedData),
-      coverLetter: generateCoverLetter(extractedData, jobAdData),
-      atsScore: Math.floor(Math.random() * 10) + 90,
-    };
+    const combinedText = extractedTexts.join('\n\n');
+    console.log('Generating CV and cover letter with Gemini AI...');
+    
+    const { extractedData, generatedContent } = await generateCVWithGemini(combinedText, jobAdData);
 
     return new Response(
       JSON.stringify({
@@ -110,96 +236,15 @@ Deno.serve(async (req) => {
         generatedContent,
         jobAdData,
         filesProcessed: fileInfos,
+        aiPowered: true,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
   } catch (error) {
     console.error('Error processing files:', error);
     return new Response(
-      JSON.stringify({ error: 'Failed to process files', details: error.message }),
+      JSON.stringify({ error: 'Failed to process files with AI', details: error.message }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }
 });
-
-function extractNameFromFiles(files: File[]): string {
-  for (const file of files) {
-    const name = file.name.toLowerCase();
-    if (name.includes('cv') || name.includes('resume')) {
-      const cleanName = file.name
-        .replace(/cv|resume|_|-|\d+|\.(pdf|docx?|jpg|jpeg|png)/gi, ' ')
-        .trim()
-        .split(' ')
-        .filter(part => part.length > 1)
-        .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-        .join(' ');
-      if (cleanName.length > 2) {
-        return cleanName;
-      }
-    }
-  }
-  return "Papua New Guinea Applicant";
-}
-
-function generateResumeText(data: ExtractedData): string {
-  return `
-${data.name}
-${data.province}, Papua New Guinea
-${data.phone} | ${data.email}
-
-PROFESSIONAL SUMMARY
-${data.summary}
-
-SKILLS
-${data.skills.join(' • ')}
-
-WORK EXPERIENCE
-${data.experience}
-
-EDUCATION
-${data.education}
-
-COMMUNITY LEADERSHIP
-${data.communityLeadership}
-
-REFEREES
-${data.referees.map(r => `${r.name} | ${r.title} | ${r.phone}`).join('\n')}
-  `.trim();
-}
-
-function generateCoverLetter(data: ExtractedData, jobAd: JobAdData | null): string {
-  const today = new Date().toLocaleDateString('en-PG', { 
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
-  });
-
-  const jobTitle = jobAd?.title || "the position advertised";
-  const companyName = jobAd?.company || "your organization";
-  const jobLocation = jobAd?.location || "";
-
-  return `${data.name}
-${data.province}, Papua New Guinea
-${data.phone}
-${data.email}
-
-${today}
-
-Dear Hiring Manager,
-
-I am writing to express my strong interest in ${jobTitle} at ${companyName}${jobLocation ? ` in ${jobLocation}` : ''}. As a dedicated professional from Papua New Guinea with over 4 years of experience in customer service and sales, I am excited about the opportunity to contribute my skills and expertise to your team.
-
-${data.summary}
-
-Throughout my career, I have consistently demonstrated excellence in ${data.skills.slice(0, 3).join(', ')}. At PNG Retail Store, I increased monthly sales by 15% and successfully trained 5 new team members. My educational background includes ${data.education.split('\n')[0]}, which has provided me with a solid foundation for professional success.
-
-Beyond my professional experience, I am actively involved in community leadership as a Youth Group Leader at Gerehu Community Church, where I organize programs for over 30 young people. This experience has strengthened my organizational and leadership abilities.
-
-I am confident that my combination of skills, experience, and dedication to excellence would make me a valuable addition to ${companyName}. I would welcome the opportunity to discuss how my background can benefit your organization.
-
-Thank you for considering my application.
-
-Yours sincerely,
-
-${data.name}`;
-}
